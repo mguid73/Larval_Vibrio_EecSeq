@@ -399,73 +399,6 @@ for (trial in trials) {
 }
 ```
 
-#### Venn Diagram for called, filtered loci between populations
-Haven't updated this code yet just adding in if I want to come back to it later.
-Right now it doesn't seem like this will be that informative as most of my variation is driven by trial (7 groups)
-```{bash}
-# extract the CHROM and POS of snps from each sync file 
-cut -f1,2 ARC.dp25.cov.sync > ARC.pos
-cut -f1,2 NEH.dp25.cov.sync > NEH.pos
-cut -f1,2 MV.dp25.cov.sync > MV.pos
-
-# count overlap between trials 
-cat <(echo "SNP") <(cat *.pos | cut -f1,2 | sort | uniq -c | mawk '$1 <2' | mawk '{print $2"_"$3}') > singleton.loci
-```
-
-```{r}
-# Read and preprocess data
-ARC.loci <- read.table("ARC.pos", header = TRUE)
-colnames(ARC.loci) <- c("CHROM", "BP")
-ARC.loci <- ARC.loci %>% mutate(ARC = TRUE)
-
-NEH.loci <- read.table("NEH.pos", header = TRUE)
-colnames(NEH.loci) <- c("CHROM", "BP")
-NEH.loci <- NEH.loci %>% mutate(NEH = TRUE)
-
-MV.loci <- read.table("MV.pos", header = TRUE)
-colnames(MV.loci) <- c("CHROM", "BP")
-MV.loci <- MV.loci %>% mutate(MV = TRUE)
-
-# Full join all data frames to preserve all CHROM and BP combinations
-pos_df <- ARC.loci %>%
-  full_join(NEH.loci %>% select(CHROM, BP, NEH), by = c("CHROM", "BP")) %>%
-  full_join(MV.loci %>% select(CHROM, BP, MV), by = c("CHROM", "BP"))
-
-# Replace NA values in the BLOCK_* columns with FALSE
-pos_df <- pos_df %>%
-  mutate(
-    ARC = ifelse(is.na(ARC), FALSE, ARC),
-    NEH = ifelse(is.na(NEH), FALSE, NEH),
-    MV = ifelse(is.na(MV), FALSE, MV)
-  )
-
-
-loci.arc <- nrow(subset(pos_df,ARC == TRUE))
-loci.neh <- nrow(subset(pos_df,NEH == TRUE))
-loci.mv <- nrow(subset(pos_df,MV == TRUE))
-
-loci.arc.neh <- nrow(subset(pos_df,ARC == TRUE & NEH ==TRUE))
-loci.arc.mv <- nrow(subset(pos_df,ARC == TRUE & MV ==TRUE))
-loci.neh.mv <- nrow(subset(pos_df,NEH == TRUE & MV ==TRUE))
-loci.arc.neh.mv <- nrow(subset(pos_df,ARC == TRUE & NEH ==TRUE & MV ==TRUE))
-
-png(filename="Venn_variants.png", type="cairo",units="px", width=4000, height=4000, res=500, bg="transparent")
-
-venn.plot <- draw.triple.venn(
-  area1=loci.arc, area2=loci.neh, area3=loci.mv, 
-  n12= loci.arc.neh, n13=loci.arc.mv, 
-  n23=loci.neh.mv,scaled=TRUE,
-  n123=loci.arc.neh.mv, cex=rep(2, 7),
-  category = c("ARC", "NEH", "MV"),
-  fill = cbPaletteSmall3, cat.cex = rep(2, 3),
-  cat.col = cbPaletteSmall3, label.col = rep("white", 7))
-dev.off()
-
-```
-
-
-
-
 
 # Population level outlier testing
 
@@ -899,6 +832,7 @@ for (pop in pops) {
 
 
 
+
 # Outlier PCA 
 PCAs on outliers from different populations
 
@@ -1043,9 +977,16 @@ make_manhattan_plot <- function(pv_data, sig_data, con_filter, allcon, pop_name,
     geom_point(aes(alpha = marker, shape = Group, size = marker)) +
     geom_point(
       data = dfmo,
-      aes(x = index, y = marker, shape = Group, size = marker),
-      color = outlier_color,
-      fill = outlier_color
+      inherit.aes = FALSE,   # <- key line
+      aes(
+        x = index,
+        y = marker,
+        shape = Group,
+        size  = marker
+      ),
+      colour = "grey20",       # outline
+      fill   = outlier_color, # single interior color per plot
+      stroke = 0.5
     ) +
     scale_x_continuous(
       breaks = xbreaks,
@@ -1060,8 +1001,8 @@ make_manhattan_plot <- function(pv_data, sig_data, con_filter, allcon, pop_name,
     ggtitle(pop_name) +
     labs(x = "Chromosome", y = expression(-Log10(q-value))) +
     theme_classic() +
-    scale_shape_manual(values = c(15, 21, 16, 17)) +
-    scale_color_manual(values = c("grey", "dark grey"), guide = FALSE) +
+    scale_shape_manual(values = c("Neutral"= 21,"Control Treatment Filtered" = 15,"Outlier" = 21)) +
+    scale_color_manual(values = c("grey30", "grey50"), guide = FALSE) +
     guides(shape = guide_legend(override.aes = list(color = "grey", size = 5, linetype = 0)))
   
   list(plot = p, dfm = dfm, dfmo = dfmo)
@@ -1077,115 +1018,107 @@ total.sig.Vibrio.filt <- read.table("Total.Significant.Loci.Vibrio", header = TR
 
 ```
 
-> nrow(total.sig.ARC)
-[1] 276
-> nrow(total.sig.ARC.filt)
-[1] 268 control filtered outliers (p<0.01)
-> nrow(total.sig.NEH)
-[1] 2216
-> nrow(total.sig.NEH.filt)
-[1] 1321 control filtered outliers (p<0.01)
-> nrow(total.sig.MV)
-[1] 4180
-> nrow(total.sig.MV.filt)
-[1] 2627 control filtered outliers (p<0.01)
-
-
 ```{r}
-vib.h <- subset(total.sig.Vibrio.filt, Sig.VC == TRUE)
+# CC, CS, VC, VS
+treatPalette <- c("#A29BAD", "white", "#D29F13", "#8CDFA0", "#EEF56E")
+```
 
+UPDATE FUNCTION TO TREATMENT FIRST!!!!
+```{r}
+vib.vc.h <- subset(total.sig.Vibrio.filt, Sig.VC == TRUE)
 
-vib_res <- make_manhattan_plot(
+vib_VC_res <- make_manhattan_plot(
   pv_data = Vib.pv,
-  sig_data = vib.h,
+  sig_data = vib.vc.h,
   con_filter = vibrio_con_filter,
   allcon = allcon.Vibrio,
-  pop_name = "Vibrio",
-  outlier_color = "#3F8F7A"
-)
+  pop_name = "Vibrio-only",
+  outlier_color = "#8CDFA0"
+); vib_VC_res
+```
 
-vib_res
+UPDATE FUNCTION TO TREATMENT FIRST!!!!
+```{r}
+vib.vs.h <- subset(total.sig.Vibrio.filt, Sig.VS == TRUE) #update manhattan plot function!
+
+vib_VS_res <- make_manhattan_plot(
+  pv_data = Vib.pv,
+  sig_data = vib.vs.h,
+  con_filter = vibrio_con_filter,
+  allcon = allcon.Vibrio,
+  pop_name = "Vibrio+stress",
+  outlier_color = "#EEF56E"
+); vib_VS_res
 
 ```
 
+```{r}
+#strip legends
+vib_VC_res_nl <- vib_VC_res$plot + theme(legend.position = "none")
+vib_VS_res_nl <- vib_VS_res$plot + theme(legend.position = "none")
+
+library(ggplot2)
+
+legend_df <- data.frame(
+  x = 1,
+  y = c(2, 1.5, 1.0, 0.5),
+  lab = c("Control Treatment Filtered",
+          "Neutral",
+          "Vibrio-only outlier",
+          "Vibrio+stress outlier")
+)
+
+legend_plot <- ggplot(legend_df, aes(x = x, y = y)) +
+  geom_text(aes(x = x + 0.001, y = y, label = lab),
+  hjust = 0, size = 3) +
+  # control
+  geom_point(
+    data = subset(legend_df, lab == "Control Treatment Filtered"),
+    shape = 15, size = 3, colour = "grey"
+  ) +
+  # neutral
+  geom_point(
+    data = subset(legend_df, lab == "Neutral"),
+    shape = 1, size = 3, colour = "grey"
+  ) +
+  # vib-only outlier (green)
+  geom_point(
+    data = subset(legend_df, lab == "Vibrio-only outlier"),
+    shape = 21, size = 3,
+    colour = "grey20", fill = "#8CDFA0", stroke = 0.5
+  ) +
+  # vib+stress outlier (yellow)
+  geom_point(
+    data = subset(legend_df, lab == "Vibrio+stress outlier"),
+    shape = 21, size = 3,
+    colour = "grey20", fill = "#EEF56E", stroke = 0.5
+  ) +
+  xlim(0.999, 1.015) +
+  ylim(0.5, 2) +
+  theme_void() 
+  #ggtitle("Group")
+
+print(legend_plot)
+```
 
 ```{r}
-png(filename = "ManhattanPlots/All_Populations_Manhattan_newfilt_2.png", 
-    units = "in", width = 10, height = 6,  res = 300, bg = "transparent")
-arc_res$plot / neh_res$plot / mv_res$plot +
-  plot_annotation(tag_levels = "A") +
-  plot_layout(guides = "collect") 
+design <- "
+AAAA#
+AAAAC
+BBBBC
+BBBB#
+"
+vib_VC_tag <- vib_VC_res_nl + labs(tag = "a)")
+vib_VS_tag <- vib_VS_res_nl + labs(tag = "b)")
+
+png(filename = "Manhattan_plots/VC_VS_Manhattan.png", 
+    units = "in", width = 10, height = 5,  res = 300, bg = "transparent")
+
+vib_VC_tag + vib_VS_tag + legend_plot +
+  #plot_annotation(tag_levels = "a", tag_suffix = ")") +
+  plot_layout(design = design)
 dev.off()
 ```
-
-
-
-## ARC - Outlier Manhattan Plot
-```{r}
-arc_con_filter <- read.table("ToFilter.Con.Loci.ARC.txt", header = TRUE)
-```
-
-```{r, warning =FALSE, eval = FALSE}
-arc.h <- subset(total.sig.ARC, Sig.STR == TRUE)
-arc.c <- subset(ARC.pv, QCON < 0.1)
-
-
-ARC.pp <- ARC.pv %>%
-  mutate(
-    Group = case_when(
-      #SNP %in% singleton$SNP ~ "Singleton",
-      SNP %in% arc.c$SNP ~ "Control Treatment Filtered",
-      SNP %in% allcon.ARC$SNP ~ "Control Treatment Filtered",
-      SNP %in% arc_con_filter$SNP ~ "Control Treatment Filtered",
-      TRUE ~ "Shared SNP"
-    )
-  )
-
-man <-ggman(ARC.pp, pvalue="QSTR", chr="CHR", snp="SNP",bp="BP", relative.positions = TRUE , sigLine = NA,
-            pointSize=1.5,title = "", alpha = 0.5)
-
-dfm <- man[[1]]
-
-dfm$chrom_alt <- factor(dfm$chrom_alt, levels=c(0,1))
-
-dfmo <- semi_join(dfm, arc.h, by = "SNP")
-dfmo$Group <- "Outlier"
-
-dfmsplit <- split(dfm, dfm$chrom)
-xbreaks <- sapply(dfmsplit,function(x) {
-    midpoint <- length(x$index)/2
-    if(midpoint <1) midpoint <- 1
-    return(x$index[midpoint])
-})
-arc.STR <-ggplot(dfm, aes(x= index, y=marker, colour = as.factor(chrom_alt)))+
-  geom_point(aes(alpha=marker, shape=Group, size = marker))+  
-  geom_point(data=dfmo, fill=cbPaletteSmall3[1], aes(x=index, y=marker, shape=Group, size=marker),  color = cbPaletteSmall3[1])+
-  scale_x_continuous(breaks = xbreaks, labels = names(xbreaks),expand = c(0,0),limits = c(0,max(dfm$index)+10)) +
-  guides(colour = FALSE,alpha=FALSE, fill = FALSE, size = FALSE) +
-  scale_y_continuous(expand = c(0,0),limits=c(0,max(dfm$marker+1,na.rm=TRUE)))+
-  scale_size_continuous(range = c(0.25,3)) +
-  scale_alpha_continuous(range=c(0.05,0.8), limits= c(0,50))+
-  ggtitle("ARC") +
-  labs(x = "Chromosome") +
-  theme_classic()+
-  labs(y=expression(-Log10(q-value))) +
-  scale_shape_manual(values=c(15,21,16,17))+
-  scale_color_manual(values=c("grey", "dark grey"), guide =FALSE)+
-  guides(shape = guide_legend(override.aes = list(color = "grey", size = 5, linetype =0) ) )
-
-print(arc.STR)
-
-ggsave(
-  filename = "ARC_manhattan.png",
-  plot     = arc.STR,
-  width    = 10,      # in inches
-  height   = 5,
-  dpi      = 300,
-  bg       = "transparent"  # or "white"
-)
-```
-
-
 
 
 
